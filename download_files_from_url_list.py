@@ -2,8 +2,6 @@
 
 """
 Point to a text file of URLs (one per line), and download them all in sequence
-
-Optionally: also provide a target folder for downloads
 """
 
 import re
