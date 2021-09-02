@@ -12,11 +12,18 @@ import requests
 import sys
 import time
 import argparse
+import sys
 
 SILENT_MODE = False
+DESTINATION_PATH = os.getcwd()
+TEMP_FILE = None
+LOG_FILE = re.sub(r'.*/', '', sys.argv[0]) + '.log'
 
 
 def get_args():
+    global SILENT_MODE
+    global DESTINATION_PATH
+
     # Range of available args and expected input
     parser = argparse.ArgumentParser(description="Download files from all URLs in a target file")
 
@@ -27,28 +34,33 @@ def get_args():
     optional_args = parser.add_argument_group()
     optional_args.add_argument(
         "-d", "--destination", type=str, default=os.getcwd(),
-        help="Optional: destination directory for downloaded files (defaults to current working directory)")
+        help="Destination directory for downloaded files (defaults to current working directory)")
 
-    optional_args.add_argument("-q", "--quiet", action="store_true", help="Quiet mode (no progress bar, so works in the background)")
+    optional_args.add_argument("-q", "--quiet", action="store_true", help="Quiet mode (suppress output and progress bar, so works in the background)")
+
+    optional_args.add_argument("-s", "--sleep", type=float, help="Sleep <N> seconds between downloads")
 
     # finalize the arguments provided by user
     _args = parser.parse_args()
 
-    if _args.quiet:
-        global SILENT_MODE
-        SILENT_MODE = True
+    SILENT_MODE = True if _args.quiet else False
+    DESTINATION_PATH = _args.destination if _args.destination else os.getcwd()
 
     return _args
 
 
 def print_error(msg):
-    # print("ERROR: " + msg, file=sys.stderr)
-    sys.stderr.write("ERROR: " + msg)
+    sys.stderr.write(re.sub(r'^(\s*)', '\1ERROR: ', msg, count=1) + '\n')
+
+
+def print_warning(msg):
+    if not SILENT_MODE:
+        sys.stdout.write(re.sub(r'^(\s*)', '\1WARN: ', msg, count=1) + '\n')
 
 
 def print_output(msg):
-    # print(msg, file=sys.stdout)
-    sys.stdout.write(msg)
+    if not SILENT_MODE:
+        sys.stdout.write(msg + '\n')
 
 
 def exit_with_error(msg):
@@ -68,15 +80,19 @@ def update_url_list(file_path, new_list):
     return
 
 
-def download_file_with_progress_bar(url, file_name, destination_path):
-    temp_file_name = file_name + '.tmp'
-    temp_target = temp_file_name
-    final_target = file_name
-    if destination_path:
-        temp_target = os.path.join(destination_path, temp_file_name)
-        final_target = os.path.join(destination_path, file_name)
-    with open(temp_target, "wb") as f:
-        print_output(f"\nDownloading: {temp_file_name}\n\t[ {url} ]")
+def download_file_with_progress_bar(url, file_name):
+    global TEMP_FILE
+    final_target = os.path.join(DESTINATION_PATH, file_name)
+    TEMP_FILE = f'{final_target}.{time.strftime("%Y-%m-%d-%H-%M-%S-%s")}.tmp'
+    if os.path.exists(final_target):
+        with open(os.path.join(DESTINATION_PATH, LOG_FILE), 'a') as f:
+            msg = f'Already exists; skipped: {url}'
+            print_warning(msg)
+            f.write(f'{time.strftime("%Y-%m-%d %H:%M:%S")} [INFO] {msg}\n')
+        return
+
+    with open(TEMP_FILE, "wb") as f:
+        print_output(f"\nDownloading: {file_name}\n\t[ {url} ]\n")
         response = requests.get(url, stream=True)
         total_length = response.headers.get('content-length')
         if total_length is None:  # no content length header
@@ -91,12 +107,14 @@ def download_file_with_progress_bar(url, file_name, destination_path):
                     done = int(50 * dl / total_length)
                     sys.stdout.write("\r[%s%s]" % ('=' * done, ' ' * (50 - done)))
                     sys.stdout.flush()
-    print_output(f"Renaming...\n\tOld: {temp_file_name}\n\tNew: {file_name}")
-    os.rename(temp_target, final_target)
+    # print_output(f"Renaming...\n\tOld: {temp_file_name}\n\tNew: {file_name}")
+    os.rename(TEMP_FILE, final_target)
+    TEMP_FILE = None
 
 
 def main():
     args = get_args()
+    sleep_time = args.sleep or 0
 
     url_list_file = args.url_file
     links = fetch_url_list(url_list_file)
@@ -104,11 +122,11 @@ def main():
         url = links.pop(0)
         unquoted = urllib.parse.unquote(url)
         name = re.sub(r'.*/', '', unquoted)
-        download_file_with_progress_bar(url, name, destination_path=args.destination or os.getcwd())
+        download_file_with_progress_bar(url, name)
         update_url_list(url_list_file, links)
-        if links:
+        if sleep_time and links:
             # pause momentarily between downloads to go easy on the remote site
-            time.sleep(2)
+            time.sleep(sleep_time)
 
     print_output('\nDone!')
 
@@ -117,4 +135,7 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
+        print('\n\n')
+        if TEMP_FILE:
+            print_warning(f'Temp file remains and must be manually deleted:\n\t{TEMP_FILE}')
         exit_with_error("Control-C Pressed; stopping...")
