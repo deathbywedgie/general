@@ -47,7 +47,7 @@ class Logger:
     def __log(self, level: str, msg: str, skip_print=False, skip_log=False):
         level = level.upper().strip() + ' ' * (5 - len(level.strip()))
         # Add session ID and log level to the message, but add it after any leading white space in case newlines are added for spacing
-        log_str = re.sub(r'^(\s*)', f'\1{f"[{self.session_id}][{level}]"}: ', msg, count=1)
+        log_str = re.sub(r'^(\s*)', f'\1{f"[{self.session_id}] [{level}]"}: ', msg, count=1)
         if not skip_print:
             is_error = True if level == 'ERROR' else False
             self.__print(log_str, error=is_error)
