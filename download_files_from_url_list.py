@@ -16,6 +16,8 @@ import urllib.request
 from datetime import datetime
 import requests
 from pathlib import Path
+import concurrent.futures
+from clint.textui import progress
 
 DESTINATION_PATH = os.getcwd()
 PRESERVE_PATHS = False
@@ -92,6 +94,7 @@ def get_args():
 
     optional_args.add_argument("-s", "--sleep", type=float, help="Sleep <N> seconds between downloads")
     optional_args.add_argument("-p", "--preserve_paths", action="store_true", help="Preserve file paths from URLs")
+    optional_args.add_argument("-t", "--threads", type=int, default=1, help="Thread count for multithreading (default: 1)")
 
     log_options = parser.add_mutually_exclusive_group()
     log_options.add_argument("-q", "--quiet", action="store_true", help="Quiet mode (suppress output and progress bar, so works in the background)")
@@ -99,51 +102,83 @@ def get_args():
 
     # finalize the arguments provided by user
     _args = parser.parse_args()
+    if _args.threads < 1:
+        raise ValueError('Thread count must be a positive number')
 
     Logger.SILENT_MODE = _args.quiet
     Logger.DEBUG_MODE = _args.debug
     PRESERVE_PATHS = _args.preserve_paths
     DESTINATION_PATH = _args.destination if _args.destination else os.getcwd()
+    Downloader.thread_limit = int(_args.threads)
 
     return _args
 
 
-def exit_with_error(msg, logger=None):
-    if not logger:
-        logger = log
-    logger.error(msg)
+def exit_with_error(msg):
+    log.error(msg)
     sys.exit(1)
 
 
-def fetch_url_list(file_path):
-    with open(file_path, 'r') as f:
-        body = f.read()
-    return [u for u in re.split(r'[\r\n]+', body) if u]
-
-
-def update_url_list(file_path, new_list):
-    with open(file_path, 'w+') as f:
-        f.write('\n'.join(new_list))
-    return
-
-
 class Downloader:
+    __started = False
+    __abort = False
+    links = []
     temp_files = []
+    thread_limit = 1
+    completed_urls = []
 
-    def __init__(self):
-        pass
+    def __init__(self, url_list_file, download_delay=0):
+        self.url_list_file = url_list_file
+        self.download_delay = download_delay
+        self.__fetch_url_list()
+
+    def __fetch_url_list(self):
+        with open(self.url_list_file, 'r') as f:
+            body = f.read()
+        final_list = []
+
+        # Dedupe but preserve original order
+        for url in [u for u in re.split(r'[\r\n]+', body) if u]:
+            if url not in final_list:
+                final_list.append(url)
+
+        self.links = final_list
 
     def remove_temp_file(self, file):
+        """ Remove a temp file from the internal tracking list """
         while file in self.temp_files:
             del self.temp_files[self.temp_files.index(file)]
 
+    def __update_download_bar(self, msg):
+        if not log.SILENT_MODE and self.thread_limit == 1:
+            if not msg:
+                print()
+            else:
+                sys.stdout.write(msg)
+                sys.stdout.flush()
+
+    def update_url_file(self):
+        with open(self.url_list_file, 'w+') as f:
+            f.write('\n'.join(self.links))
+
+    def __complete_url(self, url):
+        """ To mark a URL as completed, add to completed_urls list and delete from links list """
+        self.completed_urls.append(url)
+        del self.links[self.links.index(url)]
+
+    def abort(self):
+        self.__abort = True
+
     def download_with_progress_bar(self, url, file_name=None):
+        if self.__abort:
+            return
         # initialize a new Logger instance so each download gets a unique session ID,
         # while all messages outside of this function continue to use the same initial logger
         log = Logger()
 
         dt = datetime.now()
         url_parts = urllib.parse.urlparse(url)
+
         if not file_name:
             file_name = urllib.parse.unquote(re.sub('.*/', '', url_parts.path)) or f'unnamed_{url_parts.netloc}_{time.time_ns()}'
 
@@ -156,39 +191,53 @@ class Downloader:
 
         # Ensure unique file name for the temp file by using the current time
         temp_file = os.path.join(DESTINATION_PATH, f'{file_name}.{time.strftime("%Y-%m-%d_%H-%M-%S")}-{dt.microsecond}.tmp')
-        self.temp_files.append(temp_file)
         if os.path.exists(final_file_path):
-            log.warn(f'Already exists; skipped: {url}')
+            log.info(f'Already exists; skipped: {url}')
+            self.__complete_url(url)
             return False
 
-        with open(temp_file, "wb") as f:
-            log.info(f'\nDownloading: {file_name} [{url}]')
-            response = requests.get(url, stream=True)
+        # pause momentarily between downloads to go easy on the remote site
+        if not self.__started:
+            self.__started = True
+        elif self.download_delay:
+            log.debug(f'Sleeping for {int(self.download_delay) if int(self.download_delay) == self.download_delay else self.download_delay} seconds before next download')
+            time.sleep(self.download_delay)
+
+        log.info(f'\nDownloading: {file_name} [{url}]')
+        self.temp_files.append(temp_file)
+        response = requests.get(url, stream=True)
+        with open(temp_file, 'wb') as f:
             total_length = response.headers.get('content-length')
             if total_length is None:  # no content length header
                 f.write(response.content)
             else:
-                dl = 0
                 total_length = int(total_length)
-                for data in response.iter_content(chunk_size=4096):
-                    f.write(data)
-                    if not log.SILENT_MODE:
-                        dl += len(data)
-                        done = int(80 * dl / total_length)
-                        sys.stdout.write("\r[%s%s]" % ('=' * done, ' ' * (80 - done)))
-                        sys.stdout.flush()
-                if not Logger.SILENT_MODE:
+                if log.SILENT_MODE or self.thread_limit > 1:
+                    for data in response.iter_content(chunk_size=4096):
+                        if self.__abort:
+                            log.debug("Aborting...")
+                            return
+                        f.write(data)
+                else:
+                    for chunk in progress.bar(response.iter_content(chunk_size=1024), expected_size=(total_length / 1024) + 1):
+                        if self.__abort:
+                            log.debug("Aborting...")
+                            return
+                        if chunk:
+                            f.write(chunk)
+                            f.flush()
                     print()
+
         if not os.path.exists(download_path):
             log.debug(f'Creating subfolder(s): "{download_path}"')
             Path(download_path).mkdir(parents=True, exist_ok=True)
         log.debug(f'Renaming temp file: "{temp_file}" ==> "{final_file_path}"')
         os.rename(temp_file, final_file_path)
         self.remove_temp_file(temp_file)
+        self.__complete_url(url)
 
 
 log = Logger()
-downloader = Downloader()
 
 
 def main():
@@ -196,28 +245,28 @@ def main():
     sleep_time = args.sleep or 0
     log.debug(f'Starting at {time.strftime("%Y-%m-%d %H-%M-%S")}')
     log.debug(f'Processing URL file [{args.url_file}]')
-    url_list_file = args.url_file
-    links = fetch_url_list(url_list_file)
-    while links:
-        url = links.pop(0)
-        unquoted = urllib.parse.unquote(url)
-        name = re.sub(r'.*/', '', unquoted)
-        download_success = downloader.download_with_progress_bar(url, name)
-        update_url_list(url_list_file, links)
-        if links and download_success is not False:
-            # pause momentarily between downloads to go easy on the remote site
-            if sleep_time:
-                log.debug(f'Sleeping for {int(sleep_time) if int(sleep_time) == sleep_time else sleep_time} seconds before next download')
-            time.sleep(sleep_time)
+    downloader = Downloader(args.url_file, download_delay=sleep_time)
 
-    log.info('\nDone!')
+    with concurrent.futures.ThreadPoolExecutor(max_workers=downloader.thread_limit) as executor:
+        try:
+            futures = [executor.submit(downloader.download_with_progress_bar, url) for url in downloader.links]
+            for future in concurrent.futures.as_completed(futures):
+                _ = future.result()
+                downloader.update_url_file()
+                log.debug('Download task completed')
+        except KeyboardInterrupt:
+            downloader.abort()
+            executor.shutdown(wait=False)
+            if downloader:
+                for file in downloader.temp_files:
+                    log.warn(f'\n\nTemp file remains and must be manually deleted: {file}')
+            exit_with_error("\n\nControl-C Pressed; stopping...")
+        else:
+            log.info('\nDone!')
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print('\n\n')
-        for f in downloader.temp_files:
-            log.warn(f'Temp file remains and must be manually deleted: {f}')
-        exit_with_error("Control-C Pressed; stopping...")
+        exit_with_error("\n\nControl-C Pressed; stopping...")
