@@ -43,7 +43,7 @@ class ResourceCache:
         self.__log.debug(f"Cache initializing", dir=cache_dir, default_read_expiry=self.read_expiry)
 
         # Check diskcache.DEFAULT_SETTINGS for settings to customize and to ensure that cache is large enough
-        self.cache = diskcache.Cache(cache_dir, eviction_policy='least-recently-used')
+        self.cache = diskcache.Cache(directory=cache_dir, eviction_policy='least-recently-used')
 
     def store(self, key, value):
         self.__log.debug("Storing resource cache", resource_type=key)
