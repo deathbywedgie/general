@@ -10,7 +10,7 @@ DEFAULT_CACHE_DIR = '/tmp'
 class FakeLogger:
     """ Placeholder """
 
-    def __init(self):
+    def __init__(self):
         self.debug = self.info = self.msg
     
     def msg(self, msg, *args, **kwargs):
