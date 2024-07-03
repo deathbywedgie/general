@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """
 Simplistic example: creating immutable dicts that can be used as dict keys
 """
