@@ -15,7 +15,7 @@ class CustomDict:
         """
         Initialize the CustomDict.
         """
-        self.data = []
+        self._items = []
 
     def __setitem__(self, key, value):
         """
@@ -25,11 +25,11 @@ class CustomDict:
         key (any): The key to set.
         value (any): The value to be associated with the key.
         """
-        for i, (k, v) in enumerate(self.data):
+        for i, (k, v) in enumerate(self._items):
             if k is key or k == key:
-                self.data[i] = (key, value)
+                self._items[i] = (key, value)
                 return
-        self.data.append((key, value))
+        self._items.append((key, value))
 
     def __getitem__(self, key):
         """
@@ -44,7 +44,7 @@ class CustomDict:
         Raises:
         KeyError: If the key does not exist.
         """
-        for k, v in self.data:
+        for k, v in self._items:
             if k is key or k == key:
                 return v
         raise KeyError(f"Key {key} not found")
@@ -59,9 +59,9 @@ class CustomDict:
         Raises:
         KeyError: If the key does not exist.
         """
-        for i, (k, v) in enumerate(self.data):
+        for i, (k, v) in enumerate(self._items):
             if k is key or k == key:
-                del self.data[i]
+                del self._items[i]
                 return
         raise KeyError(f"Key {key} not found")
 
@@ -75,7 +75,7 @@ class CustomDict:
         Returns:
         bool: True if the key exists, False otherwise.
         """
-        for k, v in self.data:
+        for k, v in self._items:
             if k is key or k == key:
                 return True
         return False
@@ -87,7 +87,7 @@ class CustomDict:
         Returns:
         str: The string representation of the CustomDict.
         """
-        return f"CustomDict({self.data})"
+        return f"CustomDict({self._items})"
 
     def keys(self):
         """
@@ -96,7 +96,7 @@ class CustomDict:
         Returns:
         list: A list of keys.
         """
-        return [k for k, v in self.data]
+        return [k for k, v in self._items]
 
     def values(self):
         """
@@ -105,7 +105,7 @@ class CustomDict:
         Returns:
         list: A list of values.
         """
-        return [v for k, v in self.data]
+        return [v for k, v in self._items]
 
     def items(self):
         """
@@ -114,7 +114,7 @@ class CustomDict:
         Returns:
         list: A list of (key, value) pairs.
         """
-        return self.data[:]
+        return self._items[:]
 
 
 cd = CustomDict()
