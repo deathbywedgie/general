@@ -43,9 +43,9 @@ class ResourceCache:
         # Check diskcache.DEFAULT_SETTINGS for settings to customize and to ensure that cache is large enough
         self.cache = diskcache.Cache(cache_dir, eviction_policy='least-recently-used')
 
-    def store(self, key, result):
+    def store(self, key, value):
         self.__log.debug("Storing resource cache", resource_type=key)
-        self.cache.set(key, result, expire=self.write_expiry)
+        self.cache.set(key, value, expire=self.write_expiry)
 
     def delete(self, key):
         self.__log.debug("Deleting resource cache", resource_type=key)
@@ -69,7 +69,7 @@ class ResourceCache:
 
         if source_function:
             self.__log.info(f"No valid cache returned for type {key}; fetching resources from source")
-            self.store(key=key, result=source_function(*func_args, **func_kwargs))
+            self.store(key=key, value=source_function(*func_args, **func_kwargs))
             value, expire_time = self.cache.get(key, expire_time=True)
             return value, 0
         return None, None
