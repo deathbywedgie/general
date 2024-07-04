@@ -3,20 +3,15 @@
 import diskcache
 import os
 import time
+import logging
+import structlog
 
+logging.basicConfig(format="%(message)s", level="DEBUG")
+_logger = logging.getLogger(__name__)
+structlog.configure()
+log = structlog.wrap_logger(_logger)
 
 DEFAULT_CACHE_DIR = '/tmp'
-
-
-# ToDo REPLACE ME
-class FakeLogger:
-    """ Placeholder """
-
-    def __init__(self):
-        self.debug = self.info = self.msg
-    
-    def msg(self, msg, *args, **kwargs):
-        ...
 
 
 class ResourceCache:
@@ -28,7 +23,7 @@ class ResourceCache:
         if not cache_label or not cache_label.strip():
             raise ValueError('Cache label cannot be blank')
 
-        self.__log = FakeLogger()
+        self.__log = log.new(cache_label=cache_label)
 
         cache_dir = os.path.join(
             cache_dir.strip() if cache_dir and cache_dir.strip() else DEFAULT_CACHE_DIR,
